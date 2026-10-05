@@ -29,7 +29,10 @@ python stt.py batch  文件夹 [--force]     # 批量识别，默认跳过已有
 
 识别按音频时长计费。每次识别的纯文本和原始 JSON 会存到 `output/`（已加入 `.gitignore`），以后调整字幕格式不必重新识别。
 
-不用 Python 也能播放：直接用浏览器打开 `player.html`，把音频和同名 `.lrc` / `.srt` 一起拖进去。
+Windows 上也可以用 `player.cmd`：
+
+- **双击**：在浏览器打开播放器，把音频和同名 `.lrc` / `.srt` 一起拖进页面即可播放（不需要 Python）
+- **把音频或文件夹拖到 `player.cmd` 上**：相当于 `python stt.py play`，自动加载整个文件夹的播放列表
 
 ## 播放器快捷键
 
@@ -48,6 +51,7 @@ python stt.py batch  文件夹 [--force]     # 批量识别，默认跳过已有
 | --- | --- |
 | `stt.py` | 上传、识别、生成字幕、打开播放器 |
 | `player.html` | 播放器页面，`stt.py play` 把曲目数据注入后写到临时目录打开 |
+| `player.cmd` | Windows 启动器，双击打开播放器，或把音频/文件夹拖上去播放 |
 
 ## 许可证
 
