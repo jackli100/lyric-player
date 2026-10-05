@@ -147,7 +147,7 @@
 <div class="bg"><div class="blob b1"></div><div class="blob b2"></div><div class="blob b3"></div><div class="blob b4"></div></div>
 <div class="shade"></div>
 
-<div class="drop"><div>把音频和对应的 .lrc / .srt 一起拖进来<small>或运行 python stt.py play 音频或文件夹</small></div></div>
+<div class="drop"><div>把整个文件夹，或音频和同名 .lrc / .srt 一起拖进来<small>只有音频？把它拖到 player.cmd 上，会自动找同目录的字幕</small></div></div>
 
 <div class="app">
   <section class="side">
@@ -455,11 +455,31 @@ function start(list, i) {
   load(Math.min(Math.max(i, 0), tracks.length - 1), false);
 }
 
-/* 拖放：音频 + 同名字幕，可以一次拖多首 */
+/* 拖放：文件夹，或音频 + 同名字幕，可以一次拖多首。
+   浏览器只给被拖进来的文件，读不到它旁边的字幕，所以只拖音频不行，拖文件夹可以 */
+async function droppedFiles(dt) {
+  const entries = [...dt.items].map(it => it.webkitGetAsEntry && it.webkitGetAsEntry()).filter(Boolean);  // 必须在第一个 await 之前取
+  if (!entries.length) return [...dt.files];
+  const out = [];
+  const walk = async en => {
+    if (en.isFile) out.push(await new Promise((res, rej) => en.file(res, rej)));
+    else if (en.isDirectory) {
+      const reader = en.createReader();
+      for (;;) {  // readEntries 每次最多返回一批，读到空为止
+        const batch = await new Promise((res, rej) => reader.readEntries(res, rej));
+        if (!batch.length) break;
+        for (const c of batch) await walk(c);
+      }
+    }
+  };
+  for (const en of entries) await walk(en);
+  return out;
+}
+
 addEventListener("dragover", e => e.preventDefault());
 addEventListener("drop", async e => {
   e.preventDefault();
-  const files = [...e.dataTransfer.files];
+  const files = await droppedFiles(e.dataTransfer);
   const stem = n => n.replace(/\.[^.]+$/, "");
   const subs = new Map(files.filter(f => /\.(lrc|srt)$/i.test(f.name)).map(f => [stem(f.name), f]));
   const list = [];
@@ -469,7 +489,7 @@ addEventListener("drop", async e => {
     if (s) list.push({ title: stem(f.name), audioUrl: URL.createObjectURL(f), lyricsText: await s.text(),
                        kind: /\.srt$/i.test(s.name) ? "srt" : "lrc" });
   }
-  if (!list.length) { alert("请把音频和同名的 .lrc 或 .srt 字幕一起拖进来。"); return; }
+  if (!list.length) { alert("没找到带字幕的音频。\n\n网页读不到音频旁边的文件，请拖整个文件夹进来，或把音频和同名 .lrc / .srt 一起拖进来；\n也可以把音频直接拖到 player.cmd 上，它会自动找同目录的字幕。"); return; }
   start(list, 0);
 });
 
