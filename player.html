@@ -147,7 +147,7 @@
 <div class="bg"><div class="blob b1"></div><div class="blob b2"></div><div class="blob b3"></div><div class="blob b4"></div></div>
 <div class="shade"></div>
 
-<div class="drop"><div>把整个文件夹，或音频和同名 .lrc / .srt 一起拖进来<small>只有音频？把它拖到 player.cmd 上，会自动找同目录的字幕</small></div></div>
+<div class="drop"><div>把音频所在的文件夹拖进来<small>或把音频拖到 player.cmd 上</small></div></div>
 
 <div class="app">
   <section class="side">
@@ -455,31 +455,27 @@ function start(list, i) {
   load(Math.min(Math.max(i, 0), tracks.length - 1), false);
 }
 
-/* 拖放：文件夹，或音频 + 同名字幕，可以一次拖多首。
-   浏览器只给被拖进来的文件，读不到它旁边的字幕，所以只拖音频不行，拖文件夹可以 */
+/* 拖放文件夹：读出里面的音频和同名字幕（也接受音频 + 字幕一起拖）。
+   本地打开的页面（file://）不能用 webkitGetAsEntry 读目录，会报 EncodingError，所以用 getAsFileSystemHandle */
 async function droppedFiles(dt) {
-  const entries = [...dt.items].map(it => it.webkitGetAsEntry && it.webkitGetAsEntry()).filter(Boolean);  // 必须在第一个 await 之前取
-  if (!entries.length) return [...dt.files];
+  // 句柄必须在第一个 await 之前取完，之后 dataTransfer 就失效了
+  const items = [...dt.items].filter(it => it.kind === "file");
+  const handles = items.map(it => it.getAsFileSystemHandle ? it.getAsFileSystemHandle() : null);
+  if (!handles.length || handles.includes(null)) return { files: [...dt.files], dir: false };
   const out = [];
-  const walk = async en => {
-    if (en.isFile) out.push(await new Promise((res, rej) => en.file(res, rej)));
-    else if (en.isDirectory) {
-      const reader = en.createReader();
-      for (;;) {  // readEntries 每次最多返回一批，读到空为止
-        const batch = await new Promise((res, rej) => reader.readEntries(res, rej));
-        if (!batch.length) break;
-        for (const c of batch) await walk(c);
-      }
-    }
+  const walk = async h => {
+    if (h.kind === "file") out.push(await h.getFile());
+    else for await (const c of h.values()) await walk(c);
   };
-  for (const en of entries) await walk(en);
-  return out;
+  let dir = false;
+  for (const hp of handles) { const h = await hp; if (!h) continue; dir ||= h.kind === "directory"; await walk(h); }
+  return { files: out, dir };
 }
 
 addEventListener("dragover", e => e.preventDefault());
 addEventListener("drop", async e => {
   e.preventDefault();
-  const files = await droppedFiles(e.dataTransfer);
+  const { files, dir } = await droppedFiles(e.dataTransfer);
   const stem = n => n.replace(/\.[^.]+$/, "");
   const subs = new Map(files.filter(f => /\.(lrc|srt)$/i.test(f.name)).map(f => [stem(f.name), f]));
   const list = [];
@@ -489,7 +485,7 @@ addEventListener("drop", async e => {
     if (s) list.push({ title: stem(f.name), audioUrl: URL.createObjectURL(f), lyricsText: await s.text(),
                        kind: /\.srt$/i.test(s.name) ? "srt" : "lrc" });
   }
-  if (!list.length) { alert("没找到带字幕的音频。\n\n网页读不到音频旁边的文件，请拖整个文件夹进来，或把音频和同名 .lrc / .srt 一起拖进来；\n也可以把音频直接拖到 player.cmd 上，它会自动找同目录的字幕。"); return; }
+  if (!list.length) { if (dir) alert("这个文件夹里没有带字幕（同名 .lrc / .srt）的音频，先识别。"); return; }  // 只拖音频：忽略
   start(list, 0);
 });
 
