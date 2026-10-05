@@ -48,3 +48,7 @@ python stt.py batch  文件夹 [--force]     # 批量识别，默认跳过已有
 | --- | --- |
 | `stt.py` | 上传、识别、生成字幕、打开播放器 |
 | `player.html` | 播放器页面，`stt.py play` 把曲目数据注入后写到临时目录打开 |
+
+## 许可证
+
+[MIT](LICENSE)
