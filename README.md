@@ -1,6 +1,11 @@
 # lyric-player
 
-用阿里云百炼 `fun-asr` 把音频（课程、播客、讲座等）转成**带逐字时间戳的字幕**，再用一个 Apple Music 风格的网页播放器边听边看，当前句逐字点亮。
+把音频（课程、播客、讲座等）转成**带逐字时间戳的字幕**，再用一个 Apple Music 风格的网页播放器边听边看，当前句逐字点亮。
+
+识别引擎二选一（`.env` 的 `ASR_ENGINE`，或命令加 `--engine`）：
+
+- `local`：局域网里自建的 FunASR（Paraformer-zh）服务，免费、不出内网，25 分钟音频约 1 分钟
+- `aliyun`：阿里云百炼 `fun-asr`，按时长计费，数字/英文规整得更好
 
 - 识别结果写成同名 `.lrc`（增强版，逐字时间）和 `.srt`，放在音频旁边，其他播放器也能用
 - 播放器是单个 `player.html`，无需服务器、无第三方依赖
@@ -12,10 +17,10 @@
 
 ```bash
 pip install -r requirements.txt
-cp .env.example .env   # 填入 DASHSCOPE_API_KEY
+cp .env.example .env   # 选引擎，填 LOCAL_ASR_TOKEN 或 DASHSCOPE_API_KEY
 ```
 
-也可以直接设置环境变量 `DASHSCOPE_API_KEY`。
+这些也都可以直接设成环境变量。本地服务端见 `Documents\mac-mini\asr-server`。
 
 ## 用法
 
@@ -25,9 +30,10 @@ python stt.py tr     音频 [音频...]      # 识别：在音频旁生成同名
 python stt.py play   音频或文件夹         # 在浏览器里播放
 python stt.py trplay 音频 [--force]      # 识别并播放（已有字幕则直接播放）
 python stt.py batch  文件夹 [--force]     # 批量识别，默认跳过已有字幕的
+# 识别类命令都可加 --engine local|aliyun
 ```
 
-识别按音频时长计费。每次识别的纯文本和原始 JSON 会存到 `output/`（已加入 `.gitignore`），以后调整字幕格式不必重新识别。
+阿里云引擎按音频时长计费。每次识别的纯文本和原始 JSON 会存到 `output/`（已加入 `.gitignore`），以后调整字幕格式不必重新识别。
 
 Windows 上也可以用 `player.cmd`：
 

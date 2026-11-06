@@ -1,4 +1,4 @@
-"""字幕工具：阿里云百炼语音识别 + Apple Music 风格歌词播放器。
+"""字幕工具：语音识别（本地 FunASR 服务 / 阿里云百炼）+ Apple Music 风格歌词播放器。
 
 用法：
     python stt.py                          交互菜单
@@ -6,8 +6,13 @@
     python stt.py play   音频或文件夹         2. 播放（列表 = 该文件夹里有字幕的音频）
     python stt.py trplay 音频                3. 识别并播放（已有字幕则直接播放，--force 重新识别）
     python stt.py batch  文件夹 [--force]     4. 批量识别文件夹里的音频（默认跳过已有字幕的）
+    识别类命令都可加 --engine local|aliyun 临时切换引擎。
 
-API Key 取自环境变量 DASHSCOPE_API_KEY，或本文件夹的 .env（DASHSCOPE_API_KEY=...，见 .env.example）。
+配置取自环境变量或本文件夹的 .env（见 .env.example）：
+    ASR_ENGINE        默认引擎：local（本地 FunASR 服务）或 aliyun（默认）
+    LOCAL_ASR_URL     本地服务地址，如 http://192.168.31.36:8765
+    LOCAL_ASR_TOKEN   本地服务令牌
+    DASHSCOPE_API_KEY 阿里云百炼 API Key
 识别原文和原始结果保存在本文件夹的 output 子文件夹里。
 """
 import argparse
@@ -18,6 +23,7 @@ import shutil
 import sys
 import tempfile
 import time
+import urllib.error
 import urllib.request
 import webbrowser
 from concurrent.futures import ThreadPoolExecutor
@@ -35,19 +41,26 @@ AUDIO_EXTS = {".wav", ".mp3", ".m4a", ".aac", ".flac", ".ogg", ".opus", ".amr", 
 
 # ---------- 通用 ----------
 
-def load_key() -> str | None:
-    key = os.environ.get("DASHSCOPE_API_KEY")
-    if key:
-        return key
+def config(name: str, default: str | None = None) -> str | None:
+    """先取环境变量，再取 .env。"""
+    if os.environ.get(name):
+        return os.environ[name]
     env = HERE / ".env"
-    if not env.exists():
-        return None
-    vals = {}
-    for line in env.read_text(encoding="utf-8-sig").splitlines():
-        if "=" in line and not line.lstrip().startswith("#"):
-            k, v = line.split("=", 1)
-            vals[k.strip()] = v.strip().strip("'\"")
-    return vals.get("DASHSCOPE_API_KEY") or vals.get("stt") or None
+    if env.exists():
+        for line in env.read_text(encoding="utf-8-sig").splitlines():
+            if "=" in line and not line.lstrip().startswith("#"):
+                k, v = line.split("=", 1)
+                if k.strip() == name and v.strip():
+                    return v.strip().strip("'\"")
+    return default
+
+
+def load_key() -> str | None:
+    return config("DASHSCOPE_API_KEY") or config("stt")
+
+
+def engine_name(override: str | None = None) -> str:
+    return override or config("ASR_ENGINE", "aliyun")
 
 
 def natural_key(p: Path):
@@ -131,10 +144,52 @@ def write_subtitles(data: dict, audio: Path):
 
 # ---------- 识别 ----------
 
-def transcribe(files: list[Path]) -> list[Path]:
+def transcribe(files: list[Path], engine: str | None = None) -> list[Path]:
     """识别一批音频，返回成功生成字幕的文件。"""
     if not files:
         return []
+    engine = engine_name(engine)
+    if engine == "local":
+        return transcribe_local(files)
+    if engine != "aliyun":
+        sys.exit(f"未知识别引擎：{engine}（可选 local / aliyun）")
+    return transcribe_aliyun(files)
+
+
+def transcribe_local(files: list[Path]) -> list[Path]:
+    """逐个上传到 Mac mini 上的 FunASR 服务（asr-server），结果格式与百炼相同。"""
+    url = config("LOCAL_ASR_URL")
+    if not url:
+        sys.exit("未配置本地识别服务：请在 .env 里设置 LOCAL_ASR_URL（和 LOCAL_ASR_TOKEN）。")
+    token = config("LOCAL_ASR_TOKEN", "")
+    # 局域网地址不走系统代理
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    done = []
+    for i, src in enumerate(files, 1):
+        t0 = time.time()
+        print(f"[{i}/{len(files)}] 本地识别 {src.name}……", flush=True)
+        boundary = f"----stt{int(t0 * 1000)}"
+        body = (f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; "
+                f"filename=\"audio{src.suffix.lower()}\"\r\nContent-Type: application/octet-stream\r\n\r\n").encode() \
+            + src.read_bytes() + f"\r\n--{boundary}--\r\n".encode()
+        req = urllib.request.Request(url.rstrip("/") + "/transcribe", data=body, method="POST", headers={
+            "Content-Type": f"multipart/form-data; boundary={boundary}", "X-Token": token})
+        try:
+            with opener.open(req, timeout=3600) as r:
+                data = json.load(r)
+        except urllib.error.HTTPError as e:
+            print(f"  ✗ {src.name}：HTTP {e.code} {e.read().decode(errors='replace')[:200]}")
+            continue
+        except OSError as e:
+            print(f"  ✗ {src.name}：连不上本地识别服务 {url}（{e}）")
+            continue
+        n = write_subtitles(data, src)
+        print(f"  ✓ {src.name}（{n} 行字幕，{time.time() - t0:.1f}s）")
+        done.append(src)
+    return done
+
+
+def transcribe_aliyun(files: list[Path]) -> list[Path]:
     key = load_key()
     if not key:
         sys.exit("找不到 API Key：请设置环境变量 DASHSCOPE_API_KEY，或复制 .env.example 为 .env 并填入。")
@@ -222,24 +277,24 @@ def play(target: Path):
 
 # ---------- 四个功能 ----------
 
-def cmd_tr(paths):
+def cmd_tr(paths, engine=None):
     files = expand(paths)
     if not files:
         sys.exit("没有可识别的音频文件。")
-    transcribe(files)
+    transcribe(files, engine)
 
 
-def cmd_trplay(path, force=False):
+def cmd_trplay(path, force=False, engine=None):
     audio = Path(path).resolve()
     if not audio.is_file():
         sys.exit(f"找不到音频：{audio}")
     if force or not subtitle_of(audio):
-        if not transcribe([audio]):
+        if not transcribe([audio], engine):
             sys.exit("识别失败，无法播放。")
     play(audio)
 
 
-def cmd_batch(folder, force=False, confirm=False):
+def cmd_batch(folder, force=False, confirm=False, engine=None):
     folder = Path(folder)
     if not folder.is_dir():
         sys.exit(f"不是文件夹：{folder}")
@@ -250,11 +305,13 @@ def cmd_batch(folder, force=False, confirm=False):
     if not todo:
         return
     size = sum(a.stat().st_size for a in todo) / 1024 / 1024
-    print(f"  合计 {size:.0f} MB，会按音频时长消耗识别额度")
+    engine = engine_name(engine)
+    print(f"  合计 {size:.0f} MB，引擎 {engine}"
+          + ("，会按音频时长消耗识别额度" if engine == "aliyun" else ""))
     if confirm and input("开始识别？(y/N) ").strip().lower() != "y":
         print("已取消。")
         return
-    ok = transcribe(todo)
+    ok = transcribe(todo, engine)
     print(f"完成：成功 {len(ok)} / {len(todo)}")
 
 
@@ -304,25 +361,29 @@ def main():
         return menu()
     ap = argparse.ArgumentParser(description="字幕工具：识别 + 歌词播放器")
     sub = ap.add_subparsers(dest="cmd", required=True)
+    eng = dict(choices=["local", "aliyun"], help="识别引擎，默认取 .env 的 ASR_ENGINE")
     p = sub.add_parser("tr", help="识别（生成字幕）")
     p.add_argument("paths", nargs="+")
+    p.add_argument("--engine", **eng)
     p = sub.add_parser("play", help="播放")
     p.add_argument("path")
     p = sub.add_parser("trplay", help="识别并播放")
     p.add_argument("path")
     p.add_argument("--force", action="store_true", help="已有字幕也重新识别")
+    p.add_argument("--engine", **eng)
     p = sub.add_parser("batch", help="批量识别文件夹")
     p.add_argument("folder")
     p.add_argument("--force", action="store_true", help="已有字幕也重新识别")
+    p.add_argument("--engine", **eng)
     a = ap.parse_args()
     if a.cmd == "tr":
-        cmd_tr(a.paths)
+        cmd_tr(a.paths, a.engine)
     elif a.cmd == "play":
         play(Path(a.path))
     elif a.cmd == "trplay":
-        cmd_trplay(a.path, a.force)
+        cmd_trplay(a.path, a.force, a.engine)
     else:
-        cmd_batch(a.folder, a.force)
+        cmd_batch(a.folder, a.force, engine=a.engine)
 
 
 if __name__ == "__main__":
